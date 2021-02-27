@@ -14,7 +14,6 @@ public class ChatClient {
     private Socket clientSocket;
     private BufferedReader in;
     private PrintWriter out;
-    private boolean isShutdown;
 
     public static void main(String[] args) {
         Scanner input = new Scanner(System.in);
@@ -24,11 +23,20 @@ public class ChatClient {
         System.out.print("Port? ");
         int portNumber = Integer.parseInt(input.nextLine());
 
-        System.out.print("What's your name? ");
-        String userName = input.nextLine();
+        String userName = askForUsername(input);
+        while (userName.contains(" ")) {
+            System.out.println("Username can't have whitespace, please try again");
+            userName = askForUsername(input);
+        }
 
         ChatClient client = new ChatClient();
         client.connect(hostName, portNumber, input, userName);
+    }
+
+    private static String askForUsername(Scanner input){
+        System.out.print("Pick your username: ");
+        String result = input.nextLine();
+        return result;
     }
 
     private void connect(String hostName, int portNumber, Scanner input, String userName) {
@@ -37,31 +45,43 @@ public class ChatClient {
             out = new PrintWriter(clientSocket.getOutputStream(), true);
             System.out.println("Connection established with " + hostName + ":" + portNumber);
 
-            ExecutorService cachedPool = Executors.newFixedThreadPool(2);
-            cachedPool.submit(new Receiver());
+            ExecutorService newThread = Executors.newSingleThreadExecutor();
+            newThread.submit(new Receiver());
+            out.println(userName);
 
-            while (clientSocket.isConnected()) {
+            while (!clientSocket.isClosed()) {
                 String newInput = input.nextLine();
                 if (newInput.equals("/quit")) {
+                    out.println(userName + " has left the group chat");
                     out.println("/quit");
                     closeConnections();
-                    cachedPool.shutdownNow();
+                    System.exit(0);
                     break;
+                } else if (newInput.startsWith("/rename")) {
+                    userName = newInput.split(" ")[1];
+                    out.println(newInput);
+                } else if (newInput.equals("/list")) {
+                    out.println(newInput);
+                } else if(newInput.startsWith("/kick")) {
+                    out.println(newInput);
+                } else if (newInput.startsWith("@")) {
+                    out.println(newInput);
+                } else {
+                    out.println(userName + ": " + newInput);
                 }
-                out.println(userName + ": " + newInput);
             }
 
         } catch (IOException e) {
-            System.err.println("IOException whilst connecting to server and listening for input");
+            closeConnections();
         }
     }
 
     private void closeConnections() {
         try {
-            isShutdown = true;
+            out.println("/quit");
             clientSocket.close();
-            in.close();
             out.close();
+            in.close();
             System.out.println("Connection closed");
         } catch (IOException ex) {
             System.err.println("IOException closing connections");
@@ -72,21 +92,27 @@ public class ChatClient {
 
         @Override
         public void run() {
-            receiveMessage();
+            try {
+                in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+                while(!clientSocket.isClosed()) {
+                     receiveMessage();
+                }
+            } catch (IOException e) {
+                closeConnections();
+            }
         }
 
         private synchronized void receiveMessage() {
             try {
-                while (isShutdown) {
-                    wait();
-                }
-                in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                 String messageReceived = in.readLine();
-                System.out.println(messageReceived);
+                if(messageReceived.equals("/quit")) {
+                    closeConnections();
+                    System.exit(0);
+                } else {
+                    System.out.println(messageReceived);
+                }
             } catch (IOException ex) {
                 System.err.println("IOException whilst receiving Message");
-            } catch (InterruptedException ex) {
-                System.err.println("Interrupted exception whilst receiving Message");
             }
         }
     }

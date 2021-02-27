@@ -6,6 +6,7 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.util.LinkedList;
 import java.util.Scanner;
 import java.util.concurrent.ExecutorService;
@@ -52,6 +53,9 @@ public class ChatServer {
     private class ServerWorker implements Runnable {
 
         private Socket clientSocket;
+        private PrintWriter out;
+        private String name;
+        private BufferedReader in;
 
         public ServerWorker(Socket clientSocket) {
             this.clientSocket = clientSocket;
@@ -59,29 +63,103 @@ public class ChatServer {
 
         public void send(String message){
             try {
-                PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
+                out = new PrintWriter(clientSocket.getOutputStream(), true);
                 out.println(message);
             } catch (IOException e) {
                 e.printStackTrace();
             }
         }
 
+        public String getName(){
+            return name;
+        }
+
+        public String listUsers(){
+            StringBuilder result = new StringBuilder("\n===USER LIST===\n");
+            for(ServerWorker worker:workerList){
+                result.append(worker.getName()).append("\n");
+            }
+            return result.toString();
+        }
+
+        public void setName(String name){
+            this.name = name;
+        }
+
         @Override
         public void run(){
             try {
-                while (clientSocket.isConnected()) {
-                    BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+                int messagesReceived = 0;
+                in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+                while (!clientSocket.isClosed()) {
+
                     String messageReceived = in.readLine();
-                    if(messageReceived.equals("/quit")){
-                        clientSocket.close();
-                        workerList.remove(this);
-                        break;
-                    } else {
-                        sendAll(messageReceived);
+                    String[] messageArr = new String[2];
+                    if (messageReceived.contains(" ")){
+                        messageArr = messageReceived.split(" ");
                     }
+                    messagesReceived++;
+
+                    sendMessage(messageReceived, messageArr, messagesReceived);
                 }
             } catch (IOException ex) {
-                System.err.println("IOException whilst running ServerWorker");
+                try {
+                    clientSocket.close();
+                    in.close();
+                    workerList.remove(this);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        public synchronized void quit(){
+            try {
+                workerList.remove(this);
+                send("/quit");
+                clientSocket.close();
+                in.close();
+            } catch (IOException e) {
+                System.out.println("IOException exiting in the ServerWorker");
+            }
+        }
+
+        public synchronized void kick(String name){
+            for(ServerWorker worker:workerList){
+                if(worker.getName().equals(name)){
+                    worker.quit();
+                    return;
+                }
+            }
+            send("This user does not exist.");
+        }
+
+        private void sendMessage(String messageReceived, String[] messageArr, int messagesReceived){
+            if(messagesReceived == 1){
+                this.name = messageReceived;
+            } else if (messageReceived.equals("/quit")) {
+                quit();
+            } else if (messageReceived.equals("/list")) {
+                send(listUsers());
+            } else if (messageArr[0].equals("/rename")) {
+                sendAll(name + " changed his username to " + messageReceived.substring(messageReceived.indexOf(" ")+1));
+                setName(messageArr[1]);
+            } else if (messageArr[0].equals("/kick")) {
+                sendAll(name + " kicked " + messageArr[1]);
+                kick(messageArr[1]);
+            } else if (messageReceived.startsWith("@")) {
+                String sendTo = messageReceived.substring(1,messageReceived.indexOf(" "));
+                String messageToSend = messageReceived.substring(messageReceived.indexOf(" "));
+                for(ServerWorker worker:workerList){
+                    if(worker.getName().equals(sendTo)){
+                        worker.send("PM from " + name + ":" + messageToSend);
+                        send(name + " sent PM to " + worker.getName() + ":" + messageToSend);
+                        return;
+                    }
+                }
+                send("User doesn't exist");
+            } else {
+                sendAll(messageReceived);
             }
         }
     }
